@@ -1,5 +1,8 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:google_mobile_ads/google_mobile_ads.dart';
+import 'package:sqflite/sqflite.dart';
+import 'package:sqflite_common_ffi_web/sqflite_ffi_web.dart';
 
 import 'screens/home_screen.dart';
 import 'screens/biblioteca_screen.dart';
@@ -9,8 +12,11 @@ import 'widgets/banner_ad_widget.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Inicializar Google AdMob.
-  await MobileAds.instance.initialize();
+  if (kIsWeb) {
+    databaseFactory = databaseFactoryFfiWeb;
+  } else {
+    await MobileAds.instance.initialize();
+  }
 
   runApp(const BookTrackApp());
 }
@@ -58,7 +64,7 @@ class _BookTrackNavigationState extends State<BookTrackNavigation> {
       bottomNavigationBar: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const BannerAdWidget(),
+          if (!kIsWeb) const BannerAdWidget(),
 
           NavigationBar(
             selectedIndex: selectedIndex,
