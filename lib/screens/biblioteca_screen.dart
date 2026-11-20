@@ -1,12 +1,12 @@
-import 'dart:io';
-
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
 
 import '../models/libro.dart';
+import '../services/book_file_storage.dart';
 import '../services/database_service.dart';
+import '../services/google_auth_service.dart';
+import 'lector_screen.dart';
 
 class BibliotecaScreen extends StatefulWidget {
   const BibliotecaScreen({super.key});
@@ -19,6 +19,7 @@ class _BibliotecaScreenState extends State<BibliotecaScreen> {
   List<Libro> libros = [];
   bool cargando = true;
   bool importando = false;
+  bool abriendoLibro = false;
 
   @override
   void initState() {
@@ -76,12 +77,6 @@ class _BibliotecaScreenState extends State<BibliotecaScreen> {
 
       // Obtener el primer archivo seleccionado.
       final archivo = resultado.first;
-      final rutaOriginal = archivo.path;
-
-      if (rutaOriginal == null) {
-        mostrarMensaje('No se pudo acceder al archivo seleccionado.');
-        return;
-      }
 
       // Validar que sea PDF o EPUB.
       final formato = p.extension(archivo.name).toLowerCase();
@@ -91,23 +86,7 @@ class _BibliotecaScreenState extends State<BibliotecaScreen> {
         return;
       }
 
-      // Obtener almacenamiento privado de BookTrack.
-      final directorio = await getApplicationDocumentsDirectory();
-
-      final carpetaLibros = Directory(p.join(directorio.path, 'libros'));
-
-      // Crear carpeta si no existe.
-      if (!await carpetaLibros.exists()) {
-        await carpetaLibros.create(recursive: true);
-      }
-
-      // Generar nombre único.
-      final nombreUnico = '${DateTime.now().microsecondsSinceEpoch}$formato';
-
-      rutaCopiada = p.join(carpetaLibros.path, nombreUnico);
-
-      // Copiar el archivo al almacenamiento de la aplicación.
-      await File(rutaOriginal).copy(rutaCopiada);
+      rutaCopiada = await BookFileStorage.guardar(archivo, formato);
 
       // Crear objeto Libro.
       final libro = Libro(
@@ -133,13 +112,11 @@ class _BibliotecaScreenState extends State<BibliotecaScreen> {
       // Eliminar la copia si ocurrió un error antes de guardarla.
       if (rutaCopiada != null) {
         try {
-          final archivo = File(rutaCopiada);
-
-          if (await archivo.exists()) {
-            await archivo.delete();
-          }
-        } catch (_) {
-          // Evitar que un error de limpieza oculte el original.
+          await BookFileStorage.eliminar(rutaCopiada);
+        } catch (errorLimpieza) {
+          mostrarMensaje(
+            'No se pudo limpiar el archivo temporal: $errorLimpieza',
+          );
         }
       }
 
@@ -183,12 +160,7 @@ class _BibliotecaScreenState extends State<BibliotecaScreen> {
       // Eliminar registro de SQLite.
       await DatabaseService.eliminarLibro(libro.id!);
 
-      // Eliminar archivo del almacenamiento.
-      final archivo = File(libro.ruta);
-
-      if (await archivo.exists()) {
-        await archivo.delete();
-      }
+      await BookFileStorage.eliminar(libro.ruta);
 
       // Recargar la biblioteca.
       await cargarLibros();
@@ -196,6 +168,34 @@ class _BibliotecaScreenState extends State<BibliotecaScreen> {
       mostrarMensaje('Libro eliminado correctamente.');
     } catch (e) {
       mostrarMensaje('Error al eliminar el libro: $e');
+    }
+  }
+
+  Future<void> abrirLibro(Libro libro) async {
+    if (abriendoLibro) return;
+
+    setState(() {
+      abriendoLibro = true;
+    });
+
+    try {
+      final cuenta = await GoogleAuthService.signInToOpenBook(context);
+      if (!mounted || cuenta == null) return;
+
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (context) => LectorScreen(libro: libro),
+        ),
+      );
+      if (mounted) await cargarLibros();
+    } catch (error) {
+      mostrarMensaje('No se pudo iniciar sesión con Google: $error');
+    } finally {
+      if (mounted) {
+        setState(() {
+          abriendoLibro = false;
+        });
+      }
     }
   }
 
@@ -280,10 +280,7 @@ class _BibliotecaScreenState extends State<BibliotecaScreen> {
           ],
         ),
 
-        // ABRIR LIBRO (PENDIENTE)
-        onTap: () {
-          mostrarMensaje('Próximamente: lector de ${libro.formato}');
-        },
+        onTap: abriendoLibro ? null : () => abrirLibro(libro),
       ),
     );
   }
@@ -342,7 +339,9 @@ class _BibliotecaScreenState extends State<BibliotecaScreen> {
                     const SizedBox(height: 24),
 
                     FilledButton.icon(
-                      onPressed: importando ? null : importarLibro,
+                      onPressed: importando || abriendoLibro
+                          ? null
+                          : importarLibro,
                       icon: const Icon(Icons.add),
                       label: const Text('Importar libro'),
                     ),
@@ -362,7 +361,7 @@ class _BibliotecaScreenState extends State<BibliotecaScreen> {
       floatingActionButton: libros.isEmpty
           ? null
           : FloatingActionButton.extended(
-              onPressed: importando ? null : importarLibro,
+              onPressed: importando || abriendoLibro ? null : importarLibro,
               icon: const Icon(Icons.add),
               label: Text(importando ? 'Importando...' : 'Agregar libro'),
             ),
