@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:path/path.dart';
 import 'package:sqflite/sqflite.dart';
 
@@ -13,7 +15,7 @@ class DatabaseService {
 
     _database = await openDatabase(
       join(dbPath, 'booktrack.db'),
-      version: 1,
+      version: 2,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE libros (
@@ -26,6 +28,22 @@ class DatabaseService {
             terminado INTEGER NOT NULL DEFAULT 0
           )
         ''');
+        await db.execute('''
+          CREATE TABLE libro_archivos (
+            clave TEXT PRIMARY KEY NOT NULL,
+            contenido BLOB NOT NULL
+          )
+        ''');
+      },
+      onUpgrade: (db, oldVersion, newVersion) async {
+        if (oldVersion < 2) {
+          await db.execute('''
+            CREATE TABLE libro_archivos (
+              clave TEXT PRIMARY KEY NOT NULL,
+              contenido BLOB NOT NULL
+            )
+          ''');
+        }
       },
     );
 
@@ -59,5 +77,33 @@ class DatabaseService {
     final db = await database;
 
     return db.delete('libros', where: 'id = ?', whereArgs: [id]);
+  }
+
+  static Future<void> guardarArchivo(String clave, Uint8List contenido) async {
+    final db = await database;
+    await db.insert('libro_archivos', {
+      'clave': clave,
+      'contenido': contenido,
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  static Future<Uint8List?> obtenerArchivo(String clave) async {
+    final db = await database;
+    final resultado = await db.query(
+      'libro_archivos',
+      columns: ['contenido'],
+      where: 'clave = ?',
+      whereArgs: [clave],
+      limit: 1,
+    );
+
+    return resultado.isEmpty
+        ? null
+        : resultado.first['contenido'] as Uint8List?;
+  }
+
+  static Future<int> eliminarArchivo(String clave) async {
+    final db = await database;
+    return db.delete('libro_archivos', where: 'clave = ?', whereArgs: [clave]);
   }
 }
